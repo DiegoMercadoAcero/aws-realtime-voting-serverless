@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Votación en Tiempo Real - AWS Serverless</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 40px 20px;
+            margin: 0;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+        h1 { color: #232f3e; margin-bottom: 10px; }
+        .status {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: bold;
+            margin-bottom: 25px;
+        }
+        .connected { background-color: #d4edda; color: #155724; }
+        .disconnected { background-color: #f8d7da; color: #721c24; }
+        .buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        button {
+            background-color: #ff9900;
+            color: #232f3e;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.1s, background-color 0.2s;
+        }
+        button:hover { background-color: #e88b00; }
+        button:active { transform: scale(0.96); }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #toast {
+            visibility: hidden;
+            background-color: #232f3e;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 12px;
+            position: fixed;
+            bottom: 30px;
+            font-size: 15px;
+            z-index: 1;
+        }
+        #toast.show { visibility: visible; animation: fadein 0.3s, fadeout 0.3s 2.5s; }
+        @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
+        @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>¿Cuál es tu lenguaje favorito para Cloud?</h1>
+    <div id="statusBadge" class="status disconnected">Desconectado</div>
+
+    <div class="buttons">
+        <button onclick="sendVote('Python')" id="btnPython" disabled>🐍 Python</button>
+        <button onclick="sendVote('NodeJS')" id="btnNode" disabled>🟢 Node.js</button>
+        <button onclick="sendVote('Go')" id="btnGo" disabled>🐹 Go</button>
+    </div>
+
+    <canvas id="votesChart"></canvas>
+</div>
+
+<div id="toast">Mensaje</div>
+
+<script>
+    // ESTA URL SERÁ REEMPLAZADA AUTOMÁTICAMENTE POR NUESTRO SCRIPT DE PYTHON
+    const WEBSOCKET_URL = "__WEBSOCKET_URL_PLACEHOLDER__";
+    
+    let socket;
+    const options = ['Python', 'NodeJS', 'Go'];
+    let voteCounts = { 'Python': 0, 'NodeJS': 0, 'Go': 0 };
+
+    // Inicializar Gráfica
+    const ctx = document.getElementById('votesChart').getContext('2d');
+    const chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: options,
+            datasets: [{
+                label: 'Total de Votos',
+                data: [0, 0, 0],
+                backgroundColor: ['#3776ab', '#339933', '#00add8'],
+                borderRadius: 6
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+        }
+    });
+
+    function connectWebSocket() {
+        socket = new WebSocket(WEBSOCKET_URL);
+
+        socket.onopen = () => {
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = "🟢 Conectado en Tiempo Real";
+            badge.className = "status connected";
+            toggleButtons(false);
+        };
+
+        socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            if (data.type === "UPDATE" && data.results) {
+                // Actualizar conteos locales con lo que llega de DynamoDB
+                data.results.forEach(item => {
+                    if (voteCounts.hasOwnProperty(item.optionId)) {
+                        voteCounts[item.optionId] = item.votes;
+                    }
+                });
+                updateChart();
+            }
+        };
+
+        socket.onclose = () => {
+            const badge = document.getElementById('statusBadge');
+            badge.textContent = "🔴 Reconectando...";
+            badge.className = "status disconnected";
+            toggleButtons(true);
+            // Resiliencia en el cliente: reintentar conexión en 3 segundos
+            setTimeout(connectWebSocket, 3000);
+        };
+
+        socket.onerror = (error) => {
+            console.error("Error de WebSocket:", error);
+        };
+    }
+
+    function sendVote(option) {
+        if (socket && socket.readyState === WebSocket.OPEN) {
+            const payload = JSON.stringify({ action: "vote", option: option });
+            socket.send(payload);
+            showToast(`Voto enviado para ${option} (Encolado en SQS)`);
+        } else {
+            showToast("Sin conexión. Intentando reconectar...");
+        }
+    }
+
+    function updateChart() {
+        chart.data.datasets[0].data = options.map(opt => voteCounts[opt]);
+        chart.update();
+    }
+
+    function toggleButtons(disabled) {
+        document.getElementById('btnPython').disabled = disabled;
+        document.getElementById('btnNode').disabled = disabled;
+        document.getElementById('btnGo').disabled = disabled;
+    }
+
+    function showToast(msg) {
+        const toast = document.getElementById("toast");
+        toast.textContent = msg;
+        toast.className = "show";
+        setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 2800);
+    }
+
+    // Arrancar conexión al cargar la página
+    connectWebSocket();
+</script>
+
+</body>
+</html>
