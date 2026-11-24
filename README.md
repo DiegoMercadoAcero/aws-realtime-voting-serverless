@@ -1,4 +1,3 @@
-cat << 'EOF' > README.md
 # Sistema de Votaciones en Tiempo Real (AWS Serverless & Event-Driven)
 
 Aplicación web de votaciones en vivo construida bajo una arquitectura 100% Serverless y orientada a eventos en AWS, desplegada automáticamente mediante Infrastructure as Code (Python + Boto3).
